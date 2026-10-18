@@ -173,10 +173,14 @@
       {
         "id": "porcoes",
         "name": "Porções"
+      },
+      {
+        "id": "sobremesas-especiais",
+        "name": "Sobremesas Especiais"
       }
     ],
     "version": 2,
-    "updatedAt": 1792317679580
+    "updatedAt": 1792320846134
   },
   "products": [
     {
@@ -483,7 +487,7 @@
         "Molho especial"
       ],
       "available": true,
-      "order": 9,
+      "order": 10,
       "allowedAdditionalIds": [
         "add-ovo",
         "add-queijo",
@@ -514,7 +518,7 @@
         "Molho especial"
       ],
       "available": true,
-      "order": 10,
+      "order": 11,
       "allowedAdditionalIds": [
         "add-ovo",
         "add-queijo",
@@ -545,7 +549,7 @@
         "Molho especial"
       ],
       "available": true,
-      "order": 11,
+      "order": 12,
       "allowedAdditionalIds": [
         "add-ovo",
         "add-queijo",
@@ -563,7 +567,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 12,
+      "order": 13,
       "photoUrl": "https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=600&q=80",
       "updatedAt": 1792292020016
     },
@@ -576,7 +580,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 13,
+      "order": 14,
       "photoUrl": "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=600&q=80",
       "updatedAt": 1792292020016
     },
@@ -589,7 +593,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 14,
+      "order": 15,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Cajá",
@@ -607,7 +611,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 15,
+      "order": 16,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Morango",
@@ -625,7 +629,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 16,
+      "order": 17,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Manga",
@@ -643,7 +647,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 17,
+      "order": 18,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Abacaxi",
@@ -661,7 +665,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 18,
+      "order": 19,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Graviola",
@@ -679,7 +683,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 19,
+      "order": 20,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Acerola",
@@ -697,7 +701,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 20,
+      "order": 21,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Goiaba",
@@ -715,7 +719,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 21,
+      "order": 22,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Maracujá",
@@ -733,7 +737,7 @@
       "ingredients": [],
       "removableIngredients": [],
       "available": true,
-      "order": 22,
+      "order": 23,
       "isDrink": true,
       "drinkDetails": {
         "flavor": "Uva",
@@ -741,6 +745,21 @@
       },
       "photoUrl": "https://images.unsplash.com/photo-1533089860892-a7c6f0a88666?auto=format&fit=crop&w=600&q=80",
       "updatedAt": 1792292020016
+    },
+    {
+      "name": "Pudim de Leite Condensado Especial",
+      "categoryId": "sobremesas-especiais",
+      "price": 950,
+      "description": "Pudim caseiro cremoso com calda artesanal de caramelo",
+      "available": true,
+      "updatedAt": 1792320832932,
+      "id": "prod-mvdpjje8iqez",
+      "ingredients": [],
+      "removableIngredients": [],
+      "allowedAdditionalIds": [],
+      "order": 23,
+      "photoUrl": "https://images.unsplash.com/photo-1517427294546-5aa121f68e8a?auto=format&fit=crop&w=600",
+      "isDrink": false
     }
   ],
   "additionals": [

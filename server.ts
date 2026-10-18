@@ -325,6 +325,47 @@ app.delete('/api/admin/categories/:id', requireAdmin, (req: Request, res: Respon
   }
 });
 
+app.put('/api/admin/categories/:id', requireAdmin, (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Nome da categoria é obrigatório.' });
+    }
+    const updated = dbInstance.updateCategory(id, name.trim());
+    notifyClientsMenuUpdated('category_updated', updated);
+    res.json({
+      success: true,
+      category: updated,
+      categories: dbInstance.getCategories(),
+      config: dbInstance.getConfig(),
+      products: dbInstance.getProducts(),
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Erro ao atualizar categoria.' });
+  }
+});
+app.post('/api/admin/categories/:id', requireAdmin, (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Nome da categoria é obrigatório.' });
+    }
+    const updated = dbInstance.updateCategory(id, name.trim());
+    notifyClientsMenuUpdated('category_updated', updated);
+    res.json({
+      success: true,
+      category: updated,
+      categories: dbInstance.getCategories(),
+      config: dbInstance.getConfig(),
+      products: dbInstance.getProducts(),
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Erro ao atualizar categoria.' });
+  }
+});
+
 // Reusable helper to write base64 image data to public/uploads (and dist/uploads)
 function saveBase64Image(imageData: string, filename?: string): string {
   if (!imageData || typeof imageData !== 'string' || !imageData.startsWith('data:image')) {
@@ -513,8 +554,8 @@ app.post('/api/admin/upload-photo', requireAdmin, (req: Request, res: Response) 
   }
 });
 
-// Serve dynamic menu on /api/menu.json as well so external and fallback fetches are always fresh
-app.get('/api/menu.json', (req: Request, res: Response) => {
+// Serve dynamic menu on /api/menu.json and /api/menu so fetches are always fresh
+app.get(['/api/menu.json', '/api/menu', '/api/menu/'], (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');

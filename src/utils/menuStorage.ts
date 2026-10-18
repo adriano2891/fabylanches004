@@ -40,6 +40,11 @@ export function getApiBaseUrl(): string {
     return envUrl.trim().replace(/\/+$/, '');
   }
 
+  // When loaded on Netlify, automatically route API requests to the active Cloud Run server
+  if (typeof window !== 'undefined' && window.location.hostname.includes('netlify.app')) {
+    return 'https://ais-pre-sifywdpncspdym35ly24ac-479161098427.us-east1.run.app';
+  }
+
   return '';
 }
 
@@ -89,30 +94,7 @@ export function getLocalMenuData(): { config: StoreConfig; products: Product[]; 
     const raw = localStorage.getItem(LOCAL_MENU_DATA_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed.config && Array.isArray(parsed.products) && Array.isArray(parsed.additionals)) {
-        const productMap = new Map<string, Product>();
-        DEFAULT_PRODUCTS.forEach((dp) => productMap.set(dp.id, { ...dp }));
-
-        parsed.products.forEach((p: Product) => {
-          if (p && p.id) {
-            const existing = productMap.get(p.id);
-            if (existing) {
-              productMap.set(p.id, {
-                ...existing,
-                ...p,
-                photoUrl: p.photoUrl !== undefined ? p.photoUrl : existing.photoUrl,
-                updatedAt: p.updatedAt || existing.updatedAt || Date.now(),
-              });
-            } else {
-              productMap.set(p.id, p);
-            }
-          }
-        });
-
-        const mergedProducts = Array.from(productMap.values()).sort(
-          (a, b) => (a.order || 99) - (b.order || 99)
-        );
-
+      if (parsed.config && Array.isArray(parsed.products) && parsed.products.length > 0) {
         const finalCustomCats = parseCustomCategories(parsed.config.customCategories);
         const result = {
           config: {
@@ -121,8 +103,8 @@ export function getLocalMenuData(): { config: StoreConfig; products: Product[]; 
             customCategories: finalCustomCats,
             version: CURRENT_DATA_VERSION,
           },
-          products: mergedProducts,
-          additionals: parsed.additionals.length > 0 ? parsed.additionals : DEFAULT_ADDITIONALS,
+          products: parsed.products.sort((a: Product, b: Product) => (a.order || 99) - (b.order || 99)),
+          additionals: Array.isArray(parsed.additionals) && parsed.additionals.length > 0 ? parsed.additionals : DEFAULT_ADDITIONALS,
         };
         inMemoryCache = result;
         return result;
@@ -259,7 +241,7 @@ export async function fetchMenuDataWithFallback(): Promise<MenuDataResponse> {
 
     for (const url of endpoints) {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1500);
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
 
       try {
         const res = await fetch(url, {
@@ -277,7 +259,6 @@ export async function fetchMenuDataWithFallback(): Promise<MenuDataResponse> {
           const data = await res.json();
           if (data && data.config && Array.isArray(data.products) && data.products.length > 0) {
             const serverProducts = data.products as Product[];
-            const serverIds = new Set(serverProducts.map((p) => p.id));
 
             // Central Shared Truth: The central server database is authoritative across all devices.
             // Products, prices, descriptions, and photos from the server replace any outdated local copies.
@@ -287,15 +268,10 @@ export async function fetchMenuDataWithFallback(): Promise<MenuDataResponse> {
               if (lp && lp.id) localMap.set(lp.id, lp);
             });
 
-            // For every server product: if local has a more recent update or local has a photo and server has none, preserve local!
+            // For every server product: keep local photo if server photo is empty
             const mergedProducts: Product[] = serverProducts.map((sp) => {
               const lp = localMap.get(sp.id);
               if (lp) {
-                const localTime = Number(lp.updatedAt || 0);
-                const serverTime = Number(sp.updatedAt || 0);
-                if (localTime > serverTime) {
-                  return lp;
-                }
                 if (lp.photoUrl && !sp.photoUrl) {
                   return { ...sp, photoUrl: lp.photoUrl };
                 }
@@ -303,25 +279,14 @@ export async function fetchMenuDataWithFallback(): Promise<MenuDataResponse> {
               return sp;
             });
 
-            // Retain any custom offline-created draft products not yet synced to server
-            (local.products || []).forEach((localProd) => {
-              if (localProd && localProd.id && !serverIds.has(localProd.id)) {
-                mergedProducts.push(localProd);
-              }
-            });
-
             mergedProducts.sort((a, b) => (a.order || 99) - (b.order || 99));
 
-            // Intelligently merge custom categories so no active or newly created category is lost
+            // Server custom categories are authoritative
             const categoryMap = new Map<string, string>();
             parseCustomCategories(data.config?.customCategories).forEach((c) => {
               categoryMap.set(c.id, c.name);
             });
-            parseCustomCategories(local.config?.customCategories).forEach((c) => {
-              if (!categoryMap.has(c.id)) {
-                categoryMap.set(c.id, c.name);
-              }
-            });
+            // Ensure any category actively used by products is preserved
             mergedProducts.forEach((p) => {
               const cat = normalizeCategoryKey(p.categoryId);
               if (!['lanches', 'cuscuz', 'sopas', 'bebidas', 'todos'].includes(cat) && !categoryMap.has(cat)) {

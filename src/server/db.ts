@@ -347,23 +347,14 @@ class Database {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
         // Ensure structure sanity
-        if (parsed.config && parsed.products && parsed.additionals && parsed.admins) {
-          // Ensure all default products (like beverages/drinks) exist in database
-          const existingIds = new Set(parsed.products.map((p: any) => p.id));
-          DEFAULT_PRODUCTS.forEach(dp => {
-            if (!existingIds.has(dp.id)) {
-              parsed.products.push(dp);
-            }
-          });
-
-          // Ensure products have photoUrl if previously empty
-          parsed.products = parsed.products.map((p: any) => {
-            const def = DEFAULT_PRODUCTS.find(dp => dp.id === p.id);
-            if ((!p.photoUrl || p.photoUrl.trim() === '') && def?.photoUrl) {
-              return { ...p, photoUrl: def.photoUrl };
-            }
-            return p;
-          });
+        if (parsed.config && Array.isArray(parsed.products) && Array.isArray(parsed.additionals) && Array.isArray(parsed.admins)) {
+          // If database was empty for some reason, initialize with defaults
+          if (parsed.products.length === 0) {
+            parsed.products = [...DEFAULT_PRODUCTS];
+          }
+          if (parsed.additionals.length === 0) {
+            parsed.additionals = [...DEFAULT_ADDITIONALS];
+          }
           return parsed;
         }
       }
@@ -510,6 +501,46 @@ class Database {
     return categoryObj;
   }
 
+  public updateCategory(catId: string, newName: string): { id: string; name: string } {
+    const cleanName = (newName || '').trim();
+    if (!cleanName) {
+      throw new Error('Nome da categoria é obrigatório.');
+    }
+    const id = normalizeCategoryKey(catId);
+    if (['lanches', 'cuscuz', 'sopas', 'bebidas', 'todos'].includes(id)) {
+      throw new Error('Não é permitido renomear categorias padrão do cardápio.');
+    }
+
+    const currentCustom = parseCustomCategories(this.data.config.customCategories);
+    const existingIndex = currentCustom.findIndex(c => c.id === id);
+    if (existingIndex === -1) {
+      throw new Error('Categoria não encontrada.');
+    }
+
+    const newId = normalizeCategoryKey(cleanName);
+    if (newId === 'todos') {
+      throw new Error('O identificador "todos" é reservado pelo sistema.');
+    }
+
+    const updatedCategory = { id: newId, name: cleanName };
+    currentCustom[existingIndex] = updatedCategory;
+    this.data.config.customCategories = currentCustom;
+
+    // Update products that use this category if ID changed
+    if (newId !== id) {
+      this.data.products.forEach(p => {
+        if (normalizeCategoryKey(p.categoryId) === id) {
+          p.categoryId = newId;
+          p.updatedAt = Date.now();
+        }
+      });
+    }
+
+    this.data.config.updatedAt = Date.now();
+    this.saveData(this.data);
+    return updatedCategory;
+  }
+
   public removeCategory(catId: string): boolean {
     const id = normalizeCategoryKey(catId);
     if (['lanches', 'cuscuz', 'sopas', 'bebidas', 'todos'].includes(id)) {
@@ -583,6 +614,7 @@ class Database {
       order: targetOrder,
       photoUrl: (product.photoUrl || '').trim(),
       isDrink,
+      updatedAt: Date.now(),
     };
 
     const standardCategories = ['lanches', 'cuscuz', 'sopas', 'bebidas'];
@@ -600,6 +632,7 @@ class Database {
 
     this.data.products.push(newProduct);
     this.data.products.sort((a, b) => (a.order || 99) - (b.order || 99));
+    this.data.config.updatedAt = Date.now();
     this.saveData(this.data);
     return newProduct;
   }
@@ -625,9 +658,23 @@ class Database {
         isDrink,
         drinkDetails: isDrink ? (updates.drinkDetails || { flavor: updates.name || '', sizes: [] }) : undefined,
         ...updates,
+        updatedAt: Date.now(),
       };
+      const standardCategories = ['lanches', 'cuscuz', 'sopas', 'bebidas'];
+      if (cat && !standardCategories.includes(cat)) {
+        if (!this.data.config.customCategories) {
+          this.data.config.customCategories = [];
+        }
+        if (!this.data.config.customCategories.some(c => c.id === cat)) {
+          this.data.config.customCategories.push({
+            id: cat,
+            name: cat.charAt(0).toUpperCase() + cat.slice(1).replace(/[-_]/g, ' ')
+          });
+        }
+      }
       this.data.products.push(newProduct);
       this.data.products.sort((a, b) => (a.order || 99) - (b.order || 99));
+      this.data.config.updatedAt = Date.now();
       this.saveData(this.data);
       return newProduct;
     }
@@ -635,6 +682,19 @@ class Database {
     const existing = this.data.products[index];
     const cat = updates.categoryId ? updates.categoryId.trim().toLowerCase() : existing.categoryId;
     const isDrink = cat === 'bebidas' || updates.isDrink === true || existing.isDrink === true;
+
+    const standardCategories = ['lanches', 'cuscuz', 'sopas', 'bebidas'];
+    if (cat && !standardCategories.includes(cat)) {
+      if (!this.data.config.customCategories) {
+        this.data.config.customCategories = [];
+      }
+      if (!this.data.config.customCategories.some(c => c.id === cat)) {
+        this.data.config.customCategories.push({
+          id: cat,
+          name: cat.charAt(0).toUpperCase() + cat.slice(1).replace(/[-_]/g, ' ')
+        });
+      }
+    }
 
     this.data.products[index] = {
       ...existing,
@@ -655,6 +715,7 @@ class Database {
     // Also remove from experiment section if present
     this.data.config.experimentProductIds = this.data.config.experimentProductIds.filter(pid => pid !== id);
     if (this.data.products.length !== initialLen) {
+      this.data.config.updatedAt = Date.now();
       this.saveData(this.data);
       return true;
     }

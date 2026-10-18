@@ -138,6 +138,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState<boolean>(true);
   const [isAddingCategory, setIsAddingCategory] = useState<boolean>(false);
   const [isRemovingCategory, setIsRemovingCategory] = useState<string | null>(null);
+  const [editingCategory, setEditingCategory] = useState<{ id: string; name: string } | null>(null);
+  const [editCategoryName, setEditCategoryName] = useState<string>('');
 
   const [customApiUrlInput, setCustomApiUrlInput] = useState<string>(() => getApiBaseUrl());
   const [syncFeedback, setSyncFeedback] = useState<string>('');
@@ -273,7 +275,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [localConfig?.customCategories, products]);
 
-  // Add new category with guaranteed permanent persistence
+  // Add new category with guaranteed permanent database persistence
   const handleAddNewCategory = async (name: string, autoSelectForProduct = false) => {
     const clean = name.trim();
     if (!clean) {
@@ -283,6 +285,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const id = normalizeCategoryKey(clean);
     if (id === 'todos') {
       showToast('O nome "todos" é reservado pelo sistema.', 'error');
+      return;
+    }
+
+    if (!authToken) {
+      showToast('Faça login como administrador para adicionar categorias.', 'error');
       return;
     }
 
@@ -303,87 +310,73 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setIsAddingCategory(true);
     try {
       const apiBase = getApiBaseUrl();
-      const updatedCustom = [...currentCustom, { id, name: clean }];
-      const now = Date.now();
-      const updatedConfig: StoreConfig = {
-        ...localConfig,
-        customCategories: updatedCustom,
-        updatedAt: now,
-      };
-
       let serverConfirmed = false;
       let returnedConfig: StoreConfig | null = null;
 
-      if (authToken) {
-        // 1. First attempt: Dedicated POST /api/admin/categories endpoint
-        try {
-          const res = await fetch(`${apiBase}/api/admin/categories`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({ name: clean }),
-          });
+      // 1. Post to /api/admin/categories
+      const res = await fetch(`${apiBase}/api/admin/categories`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ name: clean }),
+      });
 
-          const contentType = res.headers.get('content-type') || '';
-          if (res.ok && contentType.includes('application/json')) {
-            const data = await res.json();
-            serverConfirmed = true;
-            if (data.config) returnedConfig = data.config;
-          } else if (res.status === 401) {
-            throw new Error('Sessão expirada. Faça login novamente.');
-          } else if (res.status !== 404 && res.status !== 405) {
-            const errData = await res.json().catch(() => null);
-            throw new Error(errData?.error || `Erro HTTP ${res.status}`);
-          }
-        } catch (fetchErr: any) {
-          if (fetchErr.message.includes('Sessão expirada') || fetchErr.message.includes('Erro HTTP')) {
-            throw fetchErr;
-          }
-        }
-
-        // 2. Fallback attempt: PUT /api/admin/config
-        if (!serverConfirmed) {
-          try {
-            const res2 = await fetch(`${apiBase}/api/admin/config`, {
-              method: 'PUT',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${authToken}`,
-              },
-              body: JSON.stringify(updatedConfig),
-            });
-            const contentType2 = res2.headers.get('content-type') || '';
-            if (res2.ok && contentType2.includes('application/json')) {
-              serverConfirmed = true;
-              returnedConfig = await res2.json();
-            } else if (res2.status === 401) {
-              throw new Error('Sessão expirada. Faça login novamente.');
-            }
-          } catch (err2: any) {
-            if (err2.message.includes('Sessão expirada')) throw err2;
-          }
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        serverConfirmed = true;
+        if (data.config) returnedConfig = data.config;
+      } else if (res.status === 401) {
+        localStorage.removeItem('faby_admin_token');
+        setAuthToken(null);
+        setAdminUser(null);
+        throw new Error('Sessão expirada. Faça login novamente.');
+      } else {
+        // Fallback to PUT /api/admin/config if route not found
+        const updatedCustom = [...currentCustom, { id, name: clean }];
+        const updatedConfig: StoreConfig = {
+          ...localConfig,
+          customCategories: updatedCustom,
+          updatedAt: Date.now(),
+        };
+        const res2 = await fetch(`${apiBase}/api/admin/config`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(updatedConfig),
+        });
+        if (res2.ok && res2.headers.get('content-type')?.includes('application/json')) {
+          serverConfirmed = true;
+          returnedConfig = await res2.json();
+        } else {
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.error || `Falha no servidor ao gravar categoria (HTTP ${res.status})`);
         }
       }
 
-      // 3. Persist locally in memory, localStorage and dispatch update
-      const finalToSave: StoreConfig = returnedConfig
-        ? {
-            ...returnedConfig,
-            customCategories: parseCustomCategories(returnedConfig.customCategories).some((c) => c.id === id)
-              ? parseCustomCategories(returnedConfig.customCategories)
-              : [...parseCustomCategories(returnedConfig.customCategories), { id, name: clean }],
-          }
-        : updatedConfig;
+      if (!serverConfirmed) {
+        throw new Error('O servidor não confirmou a gravação da categoria no banco de dados.');
+      }
+
+      // Persist in localConfig & storage
+      const finalToSave: StoreConfig = returnedConfig || {
+        ...localConfig,
+        customCategories: [...currentCustom, { id, name: clean }],
+        updatedAt: Date.now(),
+      };
 
       setLocalConfig(finalToSave);
       saveLocalMenuData({ config: finalToSave });
+      invalidateMenuCache();
 
-      // 4. Refresh global app state across menu and views
+      // Refresh global app state across menu and views
       await onRefreshData();
 
-      // 5. Clean inputs ONLY after save is completely confirmed
+      // Clean inputs ONLY after save is completely confirmed by the database
       setPanelNewCategoryName('');
       setModalNewCategoryName('');
 
@@ -393,8 +386,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setTimeout(() => setCategoryFeedback(''), 4000);
       }
 
-      // 6. Confirmação de sucesso SOMENTE após confirmação da gravação
-      showToast(`Categoria "${clean}" gravada e publicada no cardápio!`, 'success');
+      // Confirmação de sucesso SOMENTE após confirmação da gravação efetiva
+      showToast(`Categoria "${clean}" gravada com sucesso no banco de dados!`, 'success');
     } catch (err: any) {
       console.error('Erro ao cadastrar categoria:', err);
       // Preserva o nome digitado para o usuário poder tentar novamente sem redigitar
@@ -404,7 +397,67 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Remove category with server confirmation
+  // Edit/Rename existing custom category with guaranteed database persistence
+  const handleEditCategory = async (catId: string, newName: string) => {
+    const clean = newName.trim();
+    if (!clean) {
+      showToast('Por favor, informe o novo nome da categoria.', 'error');
+      return;
+    }
+    const newId = normalizeCategoryKey(clean);
+    if (newId === 'todos') {
+      showToast('O nome "todos" é reservado pelo sistema.', 'error');
+      return;
+    }
+
+    if (!authToken) {
+      showToast('Faça login como administrador para editar a categoria.', 'error');
+      return;
+    }
+
+    setIsAddingCategory(true);
+    try {
+      const apiBase = getApiBaseUrl();
+      const res = await fetch(`${apiBase}/api/admin/categories/${encodeURIComponent(catId)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ name: clean }),
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        if (res.status === 401) {
+          localStorage.removeItem('faby_admin_token');
+          setAuthToken(null);
+          setAdminUser(null);
+          throw new Error('Sessão expirada. Faça login novamente.');
+        }
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Erro HTTP ${res.status} ao renomear categoria.`);
+      }
+
+      const data = await res.json();
+      if (data.config) {
+        setLocalConfig(data.config);
+        saveLocalMenuData({ config: data.config });
+      }
+      invalidateMenuCache();
+      setEditingCategory(null);
+      setEditCategoryName('');
+
+      await onRefreshData();
+      showToast(`Categoria renomeada para "${clean}" com sucesso no banco de dados!`, 'success');
+    } catch (err: any) {
+      showToast(`Erro ao editar categoria: ${err.message}`, 'error');
+    } finally {
+      setIsAddingCategory(false);
+    }
+  };
+
+  // Remove category with strict server confirmation
   const handleRemoveCategory = async (catId: string) => {
     const count = products.filter((p) => normalizeCategoryKey(p.categoryId) === catId).length;
     if (count > 0) {
@@ -412,21 +465,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    if (!authToken) {
+      showToast('Faça login como administrador para remover categorias.', 'error');
+      return;
+    }
+
     setIsRemovingCategory(catId);
     try {
       const apiBase = getApiBaseUrl();
-      if (authToken) {
-        try {
-          const res = await fetch(`${apiBase}/api/admin/categories/${catId}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${authToken}` },
-          });
-          if (res.status === 401) {
-            throw new Error('Sessão expirada. Faça login novamente.');
-          }
-        } catch (fetchErr: any) {
-          if (fetchErr.message.includes('Sessão expirada')) throw fetchErr;
+      const res = await fetch(`${apiBase}/api/admin/categories/${encodeURIComponent(catId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          localStorage.removeItem('faby_admin_token');
+          setAuthToken(null);
+          setAdminUser(null);
+          throw new Error('Sessão expirada. Faça login novamente.');
         }
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Falha no servidor ao remover categoria (HTTP ${res.status})`);
       }
 
       const currentCustom = parseCustomCategories(localConfig?.customCategories);
@@ -439,11 +499,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       setLocalConfig(updatedConfig);
       saveLocalMenuData({ config: updatedConfig });
+      invalidateMenuCache();
+
       if (adminCategoryFilter === catId) {
         setAdminCategoryFilter('todos');
       }
       await onRefreshData();
-      showToast('Categoria removida do cardápio com sucesso!', 'success');
+      showToast('Categoria removida do banco de dados com sucesso!', 'success');
     } catch (err: any) {
       showToast(`Erro ao remover categoria: ${err.message}`, 'error');
     } finally {
@@ -972,49 +1034,55 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    if (!authToken) {
+      showToast('Você precisa estar logado como administrador para salvar produtos no banco de dados.', 'error');
+      return;
+    }
+
     setIsSavingProduct(true);
     try {
       let chosenCat = productData.categoryId || 'lanches';
+      const apiBase = getApiBaseUrl();
+
+      // If a new category was typed in the modal, ensure it is registered on the server first
       if (modalNewCategoryName.trim()) {
         const typedName = modalNewCategoryName.trim();
         const typedId = normalizeCategoryKey(typedName);
         chosenCat = typedId;
         const currentCustom = parseCustomCategories(localConfig?.customCategories);
         if (!['lanches', 'cuscuz', 'sopas', 'bebidas'].includes(typedId) && !currentCustom.some((c) => c.id === typedId)) {
-          const updatedCustom = [...currentCustom, { id: typedId, name: typedName }];
-          const updatedConfig = { ...localConfig, customCategories: updatedCustom, updatedAt: Date.now() };
-          setLocalConfig(updatedConfig);
-          saveLocalMenuData({ config: updatedConfig });
-          if (authToken) {
-            try {
-              await fetch(`${getApiBaseUrl()}/api/admin/categories`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-                body: JSON.stringify({ name: typedName }),
-              });
-            } catch {}
+          const catRes = await fetch(`${apiBase}/api/admin/categories`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ name: typedName }),
+          });
+          if (catRes.ok) {
+            const catData = await catRes.json().catch(() => null);
+            if (catData?.config) {
+              setLocalConfig(catData.config);
+              saveLocalMenuData({ config: catData.config });
+            }
           }
         }
-        setModalNewCategoryName('');
       } else {
         const catId = normalizeCategoryKey(chosenCat);
         const currentCustom = parseCustomCategories(localConfig?.customCategories);
         if (!['lanches', 'cuscuz', 'sopas', 'bebidas'].includes(catId) && !currentCustom.some((c) => c.id === catId)) {
-          const updatedCustom = [...currentCustom, { id: catId, name: formatCategoryLabel(catId) }];
-          const updatedConfig = { ...localConfig, customCategories: updatedCustom, updatedAt: Date.now() };
-          setLocalConfig(updatedConfig);
-          saveLocalMenuData({ config: updatedConfig });
-          if (authToken) {
-            try {
-              await fetch(`${getApiBaseUrl()}/api/admin/categories`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-                body: JSON.stringify({ name: formatCategoryLabel(catId) }),
-              });
-            } catch {}
+          const catRes = await fetch(`${apiBase}/api/admin/categories`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ name: formatCategoryLabel(catId) }),
+          });
+          if (catRes.ok) {
+            const catData = await catRes.json().catch(() => null);
+            if (catData?.config) {
+              setLocalConfig(catData.config);
+              saveLocalMenuData({ config: catData.config });
+            }
           }
         }
       }
+
       const finalCategory = normalizeCategoryKey(chosenCat);
       const now = Date.now();
       const cleanProductData: Partial<Product> = {
@@ -1033,78 +1101,64 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       let savedProduct: Product | null = null;
       const isEdit = Boolean(editingProduct && !isCreatingProduct && editingProduct.id);
-      const url = isEdit ? `/api/admin/products/${encodeURIComponent(editingProduct!.id)}` : '/api/admin/products';
+      const targetId = isEdit ? editingProduct!.id : (cleanProductData.id || '');
+      const url = isEdit ? `/api/admin/products/${encodeURIComponent(targetId)}` : '/api/admin/products';
       const method = isEdit ? 'PUT' : 'POST';
 
-      const apiBase = getApiBaseUrl();
-      const isStaticHost =
-        !apiBase &&
-        (typeof window !== 'undefined' &&
-          (window.location.hostname.includes('netlify.app') ||
-            window.location.hostname.includes('github.io') ||
-            window.location.hostname.includes('vercel.app')));
+      const abortCtrl = new AbortController();
+      const saveTimeoutId = setTimeout(() => abortCtrl.abort(), 15000);
 
-      if (!isStaticHost) {
-        const abortCtrl = new AbortController();
-        const saveTimeoutId = setTimeout(() => abortCtrl.abort(), 10000);
+      try {
+        const res = await fetch(`${apiBase}${url}`, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(isEdit ? { ...cleanProductData, id: targetId } : cleanProductData),
+          signal: abortCtrl.signal,
+        });
+        clearTimeout(saveTimeoutId);
 
-        try {
-          const res = await fetch(`${apiBase}${url}`, {
-            method,
+        const contentType = res.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+
+        if (res.status === 401) {
+          localStorage.removeItem('faby_admin_token');
+          setAuthToken(null);
+          setAdminUser(null);
+          throw new Error('Sessão expirada. Faça login novamente.');
+        }
+
+        if (res.ok && isJson) {
+          savedProduct = await res.json().catch(() => null);
+        } else if ((res.status === 404 || res.status === 405) && isEdit) {
+          // Automatic fallback to POST /api/admin/products with explicit ID
+          const fallbackRes = await fetch(`${apiBase}/api/admin/products`, {
+            method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify(cleanProductData),
-            signal: abortCtrl.signal,
+            body: JSON.stringify({ ...cleanProductData, id: targetId }),
           });
-          clearTimeout(saveTimeoutId);
-
-          const contentType = res.headers.get('content-type') || '';
-          const isJson = contentType.includes('application/json');
-
-          if (res.status === 401 && isJson) {
-            showToast('Sessão de administrador expirada. Faça login novamente.', 'error');
-            localStorage.removeItem('faby_admin_token');
-            setAuthToken(null);
-            setAdminUser(null);
-            setIsSavingProduct(false);
-            return;
+          if (fallbackRes.ok && fallbackRes.headers.get('content-type')?.includes('application/json')) {
+            savedProduct = await fallbackRes.json().catch(() => null);
+          } else {
+            const errData = await fallbackRes.json().catch(() => null);
+            throw new Error(errData?.error || `Falha no servidor (HTTP ${fallbackRes.status})`);
           }
-
-          if (res.ok && isJson) {
-            savedProduct = await res.json().catch(() => null);
-          } else if ((res.status === 404 || res.status === 405) && isEdit) {
-            // Automatic fallback to POST /api/admin/products with explicit ID
-            try {
-              const fallbackRes = await fetch(`${apiBase}/api/admin/products`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${authToken}`,
-                },
-                body: JSON.stringify({ ...cleanProductData, id: editingProduct!.id }),
-              });
-              if (fallbackRes.ok && fallbackRes.headers.get('content-type')?.includes('application/json')) {
-                savedProduct = await fallbackRes.json().catch(() => null);
-              }
-            } catch {}
-          }
-        } catch (netErr: any) {
-          clearTimeout(saveTimeoutId);
-          console.warn('Backend sync failed on handleSaveProduct, proceeding locally:', netErr);
+        } else {
+          const errData = isJson ? await res.json().catch(() => null) : null;
+          throw new Error(errData?.error || `Falha ao gravar produto no banco de dados (HTTP ${res.status})`);
         }
+      } catch (netErr: any) {
+        clearTimeout(saveTimeoutId);
+        throw netErr;
       }
 
-      // If server response is not available (e.g. Netlify static hosting, offline or server unreachable),
-      // seamlessly save to client storage (IndexedDB + localStorage) so work is never lost!
-      if (!savedProduct) {
-        const fallbackId = isEdit ? editingProduct!.id : (cleanProductData.id || `prod_${Date.now()}`);
-        savedProduct = {
-          ...cleanProductData,
-          id: fallbackId,
-          updatedAt: now,
-        } as Product;
+      if (!savedProduct || !savedProduct.id) {
+        throw new Error('O servidor não confirmou a gravação do produto no banco de dados.');
       }
 
       // Purge any stale image caches from CacheStorage
@@ -1116,21 +1170,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       const wasCreating = isCreatingProduct;
       const productName = savedProduct.name || cleanProductData.name;
-      // Close modal cleanly
+
+      // Close modal cleanly ONLY after confirmed database persistence
       setEditingProduct(null);
       setIsCreatingProduct(false);
+      setModalNewCategoryName('');
 
       // Refresh data and switch cardápio to the product's category so it displays immediately
       await onRefreshData(finalCategory);
+
       showToast(
         wasCreating
-          ? `Produto "${productName}" gravado e publicado na categoria ${formatCategoryLabel(finalCategory)}!`
-          : `Produto "${productName}" gravado e atualizado com sucesso no cardápio!`,
+          ? `Produto "${productName}" gravado e publicado no banco de dados com sucesso!`
+          : `Produto "${productName}" atualizado com sucesso no banco de dados!`,
         'success'
       );
     } catch (e: any) {
       console.error('Error saving product:', e);
-      showToast(`Falha ao salvar produto: ${e.message || 'Erro inesperado'}. Seus dados foram preservados para nova tentativa.`, 'error');
+      // Preserva os campos preenchidos para o usuário poder tentar novamente
+      showToast(`Erro ao salvar produto: ${e.message || 'Falha de conexão'}. Seus dados foram preservados para nova tentativa.`, 'error');
     } finally {
       setIsSavingProduct(false);
     }
@@ -1146,33 +1204,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Confirm Product Deletion
   const confirmDeleteProduct = async () => {
-    if (!authToken || !productToDelete) return;
+    if (!productToDelete) return;
+    if (!authToken) {
+      showToast('Faça login como administrador para excluir produtos.', 'error');
+      return;
+    }
     setIsDeleting(true);
     try {
       const apiBase = getApiBaseUrl();
-      const isStaticHost =
-        !apiBase &&
-        (typeof window !== 'undefined' &&
-          (window.location.hostname.includes('netlify.app') ||
-            window.location.hostname.includes('github.io') ||
-            window.location.hostname.includes('vercel.app')));
+      const res = await fetch(`${apiBase}/api/admin/products/${encodeURIComponent(productToDelete.id)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
 
-      if (!isStaticHost) {
-        try {
-          const res = await fetch(`${apiBase}/api/admin/products/${encodeURIComponent(productToDelete.id)}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${authToken}` },
-          });
-
-          if (!res.ok && (res.status === 404 || res.status === 405)) {
-            // Fallback POST alias for environments restricting DELETE
-            await fetch(`${apiBase}/api/admin/products/${encodeURIComponent(productToDelete.id)}/delete`, {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${authToken}` },
-            }).catch(() => {});
-          }
-        } catch (netErr: any) {
-          console.warn('Backend sync failed on delete, proceeding locally:', netErr);
+      if (!res.ok) {
+        if (res.status === 401) {
+          localStorage.removeItem('faby_admin_token');
+          setAuthToken(null);
+          setAdminUser(null);
+          throw new Error('Sessão expirada. Faça login novamente.');
+        }
+        // Fallback POST alias for environments restricting DELETE
+        const fallbackRes = await fetch(`${apiBase}/api/admin/products/${encodeURIComponent(productToDelete.id)}/delete`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (!fallbackRes.ok) {
+          const errData = await fallbackRes.json().catch(() => null);
+          throw new Error(errData?.error || `Falha no servidor ao remover produto (HTTP ${fallbackRes.status})`);
         }
       }
 
@@ -1184,7 +1243,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const deletedName = productToDelete.name;
       setProductToDelete(null);
       await onRefreshData();
-      showToast(`Produto "${deletedName}" removido com sucesso!`, 'success');
+      showToast(`Produto "${deletedName}" removido com sucesso do banco de dados!`, 'success');
     } catch (e: any) {
       showToast(e.message || 'Erro ao remover produto.', 'error');
     } finally {
@@ -1194,39 +1253,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Toggle Product Availability
   const handleToggleProductAvailability = async (product: Product) => {
-    if (!authToken) return;
+    if (!authToken) {
+      showToast('Faça login como administrador para alterar a disponibilidade.', 'error');
+      return;
+    }
     try {
       const apiBase = getApiBaseUrl();
-      const isStaticHost =
-        !apiBase &&
-        (typeof window !== 'undefined' &&
-          (window.location.hostname.includes('netlify.app') ||
-            window.location.hostname.includes('github.io') ||
-            window.location.hostname.includes('vercel.app')));
+      const res = await fetch(`${apiBase}/api/admin/products/${encodeURIComponent(product.id)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ available: !product.available }),
+      });
 
-      if (!isStaticHost) {
-        try {
-          const res = await fetch(`${apiBase}/api/admin/products/${encodeURIComponent(product.id)}`, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${authToken}`,
-            },
-            body: JSON.stringify({ available: !product.available }),
-          });
-
-          if (!res.ok && (res.status === 404 || res.status === 405)) {
-            await fetch(`${apiBase}/api/admin/products`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${authToken}`,
-              },
-              body: JSON.stringify({ id: product.id, available: !product.available }),
-            }).catch(() => {});
-          }
-        } catch (netErr: any) {
-          console.warn('Backend sync failed on toggle availability, proceeding locally:', netErr);
+      if (!res.ok) {
+        if (res.status === 401) {
+          localStorage.removeItem('faby_admin_token');
+          setAuthToken(null);
+          setAdminUser(null);
+          throw new Error('Sessão expirada. Faça login novamente.');
+        }
+        const fallbackRes = await fetch(`${apiBase}/api/admin/products`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ id: product.id, available: !product.available }),
+        });
+        if (!fallbackRes.ok) {
+          const errData = await fallbackRes.json().catch(() => null);
+          throw new Error(errData?.error || `Erro ao atualizar no banco de dados (HTTP ${res.status})`);
         }
       }
 
@@ -1239,7 +1298,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       await onRefreshData();
       showToast(
-        `Produto "${product.name}" agora está ${!product.available ? 'Disponível' : 'Esgotado'}.`,
+        `Produto "${product.name}" agora está ${!product.available ? 'Disponível' : 'Esgotado'} no cardápio.`,
         'success'
       );
     } catch (e: any) {
@@ -2366,24 +2425,92 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               {prodCount}
                             </span>
                             {!isStandard && (
-                              <button
-                                type="button"
-                                disabled={isRemovingCategory === cat.id}
-                                title={`Remover categoria "${cat.name}"`}
-                                onClick={() => handleRemoveCategory(cat.id)}
-                                className="p-0.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer disabled:opacity-50"
-                              >
-                                {isRemovingCategory === cat.id ? (
-                                  <div className="w-3.5 h-3.5 border-2 border-rose-600 border-t-transparent rounded-full animate-spin" />
-                                ) : (
-                                  <X className="w-3.5 h-3.5" />
-                                )}
-                              </button>
+                              <div className="flex items-center gap-0.5">
+                                <button
+                                  type="button"
+                                  disabled={isAddingCategory}
+                                  title={`Editar / Renomear categoria "${cat.name}"`}
+                                  onClick={() => {
+                                    setEditingCategory(cat);
+                                    setEditCategoryName(cat.name);
+                                  }}
+                                  className="p-0.5 text-stone-400 hover:text-purple-700 hover:bg-purple-50 rounded transition cursor-pointer"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isRemovingCategory === cat.id}
+                                  title={`Remover categoria "${cat.name}"`}
+                                  onClick={() => handleRemoveCategory(cat.id)}
+                                  className="p-0.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer disabled:opacity-50"
+                                >
+                                  {isRemovingCategory === cat.id ? (
+                                    <div className="w-3.5 h-3.5 border-2 border-rose-600 border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <X className="w-3 h-3" />
+                                  )}
+                                </button>
+                              </div>
                             )}
                           </div>
                         );
                       })}
                     </div>
+
+                    {/* Bar for editing an active category */}
+                    {editingCategory && (
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-3 bg-purple-50/90 border border-purple-300 rounded-xl mt-2">
+                        <div className="flex items-center gap-2">
+                          <Edit3 className="w-4 h-4 text-purple-700 shrink-0" />
+                          <span className="text-xs font-bold text-purple-950">
+                            Renomear "{editingCategory.name}":
+                          </span>
+                        </div>
+                        <input
+                          type="text"
+                          value={editCategoryName}
+                          disabled={isAddingCategory}
+                          onChange={(e) => setEditCategoryName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !isAddingCategory) {
+                              e.preventDefault();
+                              handleEditCategory(editingCategory.id, editCategoryName);
+                            }
+                          }}
+                          className="flex-1 p-2 text-xs border border-purple-300 rounded-lg bg-white text-stone-900 font-medium"
+                          placeholder="Novo nome da categoria..."
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isAddingCategory}
+                            onClick={() => handleEditCategory(editingCategory.id, editCategoryName)}
+                            className="px-3 py-2 bg-purple-900 hover:bg-purple-800 disabled:opacity-60 text-amber-300 rounded-lg text-xs font-black transition cursor-pointer shadow-xs flex items-center gap-1.5"
+                          >
+                            {isAddingCategory ? (
+                              <>
+                                <div className="w-3.5 h-3.5 border-2 border-amber-300 border-t-transparent rounded-full animate-spin shrink-0" />
+                                <span>Gravando...</span>
+                              </>
+                            ) : (
+                              <span>Salvar Alteração</span>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isAddingCategory}
+                            onClick={() => {
+                              setEditingCategory(null);
+                              setEditCategoryName('');
+                            }}
+                            className="px-3 py-2 bg-stone-200 hover:bg-stone-300 text-stone-700 rounded-lg text-xs font-bold transition cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Products Filters & Search */}
